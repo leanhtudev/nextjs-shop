@@ -1,0 +1,139 @@
+name: Infrastructure (Terraform)
+
+# PR touching infra/  → fmt, validate, security scan, plan (plan in the job summary)
+# Merge to main       → apply, gated by the protected "infra" environment
+# AWS jobs are skipped until the repository variable AWS_INFRA_ENABLED is "true".
+on:
+  pull_request:
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+  push:
+    branches: [main]
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-production
+  cancel-in-progress: false # never interrupt a running apply (state lock)
+
+defaults:
+  run:
+    working-directory: infra
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_VAR_region: ${{ vars.AWS_REGION }}
+  TF_VAR_github_repo: ${{ github.repository }}
+  TF_VAR_certificate_arn: ${{ vars.CERTIFICATE_ARN }}
+
+jobs:
+  validate:
+    name: fmt + validate + scan (no AWS access)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+      - name: Validate bootstrap stack
+        working-directory: infra/bootstrap
+        run: terraform init -backend=false && terraform validate
+      - name: Misconfiguration scan (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infra
+          severity: CRITICAL,HIGH
+          # Report-only for now: the starter knowingly has public subnets, HTTP without a cert and an
+          # admin bootstrap role (see DEPLOYMENT.md "Known limits"). Set to "1" once those are fixed.
+          exit-code: "0"
+
+  plan:
+    name: Plan
+    needs: validate
+    if: github.event_name == 'pull_request' && vars.AWS_INFRA_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_ROLE_ARN }} # infra/bootstrap output github_infra_role_arn
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Write backend config
+        env:
+          BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          cat > backend.hcl <<EOF
+          bucket       = "$BUCKET"
+          key          = "nextjs-shop/production.tfstate"
+          region       = "$REGION"
+          use_lockfile = true
+          encrypt      = true
+          EOF
+      - run: terraform init -backend-config=backend.hcl
+      - name: terraform plan
+        run: |
+          terraform plan -lock-timeout=5m -no-color -out=tfplan | tee plan.txt
+          {
+            echo '### Terraform plan'
+            echo '```'
+            tail -c 60000 plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: Apply
+    needs: validate
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.AWS_INFRA_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: infra # protected: add required reviewers in repo settings
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Write backend config
+        env:
+          BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          REGION: ${{ vars.AWS_REGION }}
+        run: |
+          cat > backend.hcl <<EOF
+          bucket       = "$BUCKET"
+          key          = "nextjs-shop/production.tfstate"
+          region       = "$REGION"
+          use_lockfile = true
+          encrypt      = true
+          EOF
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform apply -lock-timeout=5m -auto-approve
+      - name: Outputs for GitHub variables
+        run: |
+          {
+            echo '### Terraform outputs (copy into GitHub variables)'
+            echo '```'
+            terraform output -no-color
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,5 @@
+# PLACEHOLDERS: copy to terraform.tfvars for local runs. CI passes these as TF_VAR_* from GitHub variables.
+region          = "eu-north-1"
+github_repo     = "REPLACE_OWNER/nextjs-shop"
+desired_count   = 1
+certificate_arn = "" # e.g. "arn:aws:acm:eu-north-1:000000000000:certificate/REPLACE_ME" once you have a domain

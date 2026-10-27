@@ -1,0 +1,26 @@
+# Keeps pinned action SHAs, npm packages, the Node base image and Terraform providers up to date.
+# Every update arrives as a PR and goes through the full CI gate.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+
+  - package-ecosystem: terraform
+    directories: [/infra, /infra/bootstrap]
+    schedule: { interval: weekly }

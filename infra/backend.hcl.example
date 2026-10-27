@@ -1,0 +1,6 @@
+# PLACEHOLDERS: copy to backend.hcl (git-ignored) for local runs; CI generates it.
+bucket       = "replace-me-nextjs-shop-tfstate"
+key          = "nextjs-shop/production.tfstate"
+region       = "eu-north-1"
+use_lockfile = true
+encrypt      = true
