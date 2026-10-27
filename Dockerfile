@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.10
 # Multi-stage build for the Next.js standalone server (see next.config.ts: output "standalone").
 
-FROM node:22-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 # Git SHA from CI -> next.config.ts deploymentId (version skew protection on rolling deploys).
@@ -20,7 +20,7 @@ COPY . .
 RUN --mount=type=secret,id=server_actions_key,env=NEXT_SERVER_ACTIONS_ENCRYPTION_KEY,required=false \
     npm run build
 
-FROM node:22-alpine AS run
+FROM node:26-alpine AS run
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
